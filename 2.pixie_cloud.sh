@@ -2,9 +2,29 @@
 
 source "$(dirname "$0")/utils.sh"
 
+CUSTOM_DEPLOYMENTS=("java-problematic-client" "java17-service" "service-a" "traffic-generator")
+MISSING_DEPLOY=0
+
 if ! validate_commands "${REQUIRED_TOOLS[@]}"; then
 	echo "Faltan dependencias críticas. Abortando."
 	exit 1
+fi
+
+for deploy in "${CUSTOM_DEPLOYMENTS[@]}"; do
+	if ! kubectl get deployment "$deploy" >/dev/null 2>&1; then
+		MISSING_DEPLOY=1
+		break
+	fi
+done
+
+if [ "$MISSING_DEPLOY" -eq 1 ]; then
+	echo "Iniciando los pods personalizados..."
+	kubectl apply -f ./manifests/
+
+	echo "Esperando a que los deployments estén listos..."
+	kubectl wait --for=condition=available --timeout=60s deployment/service-a >/dev/null 2>&1
+else
+	echo "Los pods personalizados ya están desplegados."
 fi
 
 echo "Iniciando configuración de Pixie Cloud..."

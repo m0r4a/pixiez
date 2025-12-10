@@ -1,0 +1,163 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java8-service
+  labels:
+    app: java8-service
+    language: java
+    javaVersion: "8"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java8-service
+  template:
+    metadata:
+      labels:
+        app: java8-service
+        language: java
+        javaVersion: "8"
+    spec:
+      containers:
+        - name: java8-service
+          image: freddiedevops/hello-world-spring-boot:25
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: java8-service
+  labels:
+    app: java8-service
+spec:
+  selector:
+    app: java8-service
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java17-service
+  labels:
+    app: java17-service
+    language: java
+    javaVersion: "17"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java17-service
+  template:
+    metadata:
+      labels:
+        app: java17-service
+        language: java
+        javaVersion: "17"
+    spec:
+      containers:
+        - name: java17-service
+          # Demo Spring Boot app con JDK 17
+          image: pugwoo/java-spring-boot-demo:1.0.8-jdk17
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: java17-service
+  labels:
+    app: java17-service
+spec:
+  selector:
+    app: java17-service
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+
+---
+# � Pod problemático: genera tráfico, errores y latencias random
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java-problematic-client
+  labels:
+    app: java-problematic-client
+    role: troublemaker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: java-problematic-client
+  template:
+    metadata:
+      labels:
+        app: java-problematic-client
+        role: troublemaker
+    spec:
+      containers:
+        - name: java-problematic-client
+          image: curlimages/curl
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "Iniciando pod problemático...";
+              while true; do
+                # Llamadas normales
+                echo "[OK] GET java8-service /";
+                curl -s java8-service.default.svc.cluster.local/ >/dev/null || echo "[ERR] fallo java8 /";
+
+                echo "[OK] GET java17-service /";
+                curl -s java17-service.default.svc.cluster.local/ >/dev/null || echo "[ERR] fallo java17 /";
+
+                # Errores 404 adrede
+                echo "[ERR-404] GET java8-service /noexiste";
+                curl -s -o /dev/null -w "%{http_code}\n" java8-service.default.svc.cluster.local/noexiste || echo "[ERR] fallo java8 /noexiste";
+
+                echo "[ERR-404] GET java17-service /noexiste";
+                curl -s -o /dev/null -w "%{http_code}\n" java17-service.default.svc.cluster.local/noexiste || echo "[ERR] fallo java17 /noexiste";
+
+                # Latencias random simuladas
+                SLEEP_TIME=$(( (RANDOM % 5) + 1 ));
+                echo "Simulando latencia de ${SLEEP_TIME}s...";
+                sleep ${SLEEP_TIME};
+
+                # Host inexistente (DNS error)
+                echo "[ERR-DNS] GET servicio-que-no-existe";
+                curl -s servicio-que-no-existe.default.svc.cluster.local || echo "[ERR] fallo DNS esperado";
+
+                echo "---- ciclo terminado ----";
+                sleep 2;
+              done;
+
