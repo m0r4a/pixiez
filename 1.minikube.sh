@@ -5,5 +5,4 @@ minikube start \
 	--disk-size=40g \
 	--kubernetes-version=stable \
 	--addons=ingress \
-	--addons=metrics-server \
-	--extra-config=kubelet.cgroup-driver=systemd
+	--addons=metrics-server
