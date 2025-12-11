@@ -1,9 +1,12 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
 # Script de Configuración de Cluster Kubernetes
 # Instala containerd 1.6.24, kubeadm/kubelet/kubectl 1.28.2
 # Configura requisitos del sistema e inicializa el plano de control
+
+# Habilitar modo debug si se pasa -x como argumento
+[[ "${1:-}" == "-x" ]] && set -x
 
 readonly CONTAINERD_VERSION="1.6.24-1"
 readonly K8S_VERSION="1.28.2-1.1"
@@ -22,7 +25,10 @@ error() {
 }
 
 check_root() {
-	[[ $EUID -eq 0 ]] || error "Este script debe ejecutarse como root"
+	if [[ $EUID -ne 0 ]]; then
+		error "Este script debe ejecutarse como root"
+	fi
+	log "Verificación de permisos root: OK"
 }
 
 install_containerd() {
@@ -58,6 +64,14 @@ install_containerd() {
 
 	systemctl restart containerd
 	systemctl enable containerd
+
+	# Configurar crictl para usar containerd
+	cat >/etc/crictl.yaml <<EOF
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+timeout: 10
+EOF
+
 	log "containerd instalado y configurado"
 }
 
@@ -136,10 +150,13 @@ EOF
 
 get_primary_ip() {
 	# Obtener primera IP no-loopback
-	ip -4 addr show |
+	local primary_ip
+	primary_ip=$(ip -4 addr show 2>/dev/null |
 		grep -oP '(?<=inet\s)\d+(\.\d+){3}' |
 		grep -v '127.0.0.1' |
-		head -n 1
+		head -n 1)
+
+	echo "${primary_ip}"
 }
 
 initialize_cluster() {
@@ -153,7 +170,9 @@ initialize_cluster() {
 	local primary_ip
 	primary_ip=$(get_primary_ip)
 
-	[[ -n ${primary_ip} ]] || error "No se pudo determinar la dirección IP primaria"
+	if [[ -z "${primary_ip}" ]]; then
+		error "No se pudo determinar la dirección IP primaria"
+	fi
 	log "Usando dirección del servidor API: ${primary_ip}"
 
 	# Descargar imágenes necesarias
@@ -174,15 +193,30 @@ setup_kubeconfig() {
 	export KUBECONFIG=/etc/kubernetes/admin.conf
 
 	# Esperar a que el servidor API esté listo
-	local retries=30
-	while ! kubectl get nodes &>/dev/null && ((retries > 0)); do
-		log "Esperando a que el servidor API esté listo... (${retries} intentos restantes)"
+	local retries=60
+	log "Esperando a que el API server esté disponible..."
+
+	while ! kubectl get --raw /healthz &>/dev/null; do
+		if [[ ${retries} -le 0 ]]; then
+			error "El servidor API no se volvió disponible después de 120 segundos"
+		fi
+
+		if [[ $((retries % 10)) -eq 0 ]]; then
+			log "Esperando API server... (${retries} intentos restantes)"
+		fi
+
 		sleep 2
 		((retries--))
 	done
 
-	[[ ${retries} -gt 0 ]] || error "El servidor API no se volvió disponible"
 	log "Servidor API está listo"
+
+	# Verificar que podemos listar nodos
+	if kubectl get nodes &>/dev/null; then
+		log "Conexión con el cluster verificada"
+	else
+		error "No se pudo conectar con el cluster"
+	fi
 }
 
 install_calico() {
@@ -221,10 +255,20 @@ main() {
 	setup_kubeconfig
 	install_calico
 
+	# Configurar kubeconfig
+	if ! grep -q "KUBECONFIG=/etc/kubernetes/admin.conf" ~/.bashrc; then
+		echo "export KUBECONFIG=/etc/kubernetes/admin.conf" >>~/.bashrc
+		log "Kubeconfig configurado para usuario root"
+	fi
+
 	log "Configuración completada"
 	log ""
-	log "Siguientes pasos para acceso de usuario regular:"
+	log "El cluster está listo. Ejecuta 'source ~/.bashrc' o inicia una nueva sesión."
+	log ""
+	log "Para configurar acceso de usuario regular:"
 	log "  mkdir -p \$HOME/.kube"
 	log "  sudo cp -i /etc/kubernetes/admin.conf \$HOME/.kube/config"
 	log "  sudo chown \$(id -u):\$(id -g) \$HOME/.kube/config"
 }
+
+main "$@"
